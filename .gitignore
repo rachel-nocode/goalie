@@ -1,0 +1,9 @@
+.env
+.env.local
+.cache
+.codex
+.netlify
+.playwright-mcp
+node_modules
+dist
+desktop-dist

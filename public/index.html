@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IdeaNibble | Micro SaaS Idea Generator for Tiny MVPs</title>
+    <meta
+      name="description"
+      content="Find tiny app ideas and micro SaaS ideas from live trend signals, then build a first MVP with your local coding CLI."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;500;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero-panel">
+        <header class="topbar">
+          <div>
+            <p class="eyebrow">Signal-fed idea board + local app factory</p>
+            <a class="brand" href="/">IdeaNibble</a>
+          </div>
+          <div class="stamp">
+            <span class="stamp-label">Fresh batch</span>
+            <strong id="generatedDate">Loading…</strong>
+          </div>
+        </header>
+
+        <div class="hero-grid">
+          <section class="hero-copy">
+            <p class="hero-kicker">Micro SaaS ideas + tiny MVP prompts</p>
+            <h1>Tiny app ideas you can actually build.</h1>
+            <p class="hero-body">
+              IdeaNibble pulls live trend signals, turns them into small product ideas, and lets
+              your local Claude Code or Codex CLI build a first MVP into its own project folder.
+            </p>
+
+            <div class="hero-actions">
+              <button class="primary-button" id="refreshButton" type="button">
+                Refresh today’s batch
+              </button>
+              <div class="status-row">
+                <span class="mini-chip" id="signalCountChip">0 live signals</span>
+                <span class="mini-chip" id="sourceCountChip">0 sources</span>
+                <span class="mini-chip" id="modelChip">Checking model</span>
+                <span class="mini-chip" id="projectRootChip">Build root loading</span>
+              </div>
+            </div>
+          </section>
+
+          <aside class="control-card" aria-labelledby="sliderTitle">
+            <div class="control-head">
+              <div>
+                <p class="eyebrow">Idea dial</p>
+                <h2 id="sliderTitle">How wild should the ideas feel?</h2>
+              </div>
+              <div class="mode-chip" id="modeChip">Normal</div>
+            </div>
+
+            <label class="slider-label" for="intensityRange">Normal on the left, crazy on the right.</label>
+            <input
+              class="intensity-range"
+              id="intensityRange"
+              type="range"
+              min="0"
+              max="100"
+              value="18"
+            />
+            <div class="range-scale" aria-hidden="true">
+              <span>Normal</span>
+              <span>Crazy</span>
+            </div>
+            <p class="mode-copy" id="modeCopy">
+              Practical ideas that still feel current and sharp.
+            </p>
+
+            <div class="category-group" role="tablist" aria-label="Idea categories">
+              <button class="category-pill is-active" type="button" data-category="all" aria-pressed="true">
+                All
+              </button>
+              <button class="category-pill" type="button" data-category="seo" aria-pressed="false">
+                SEO
+              </button>
+              <button class="category-pill" type="button" data-category="aso" aria-pressed="false">
+                ASO
+              </button>
+              <button class="category-pill" type="button" data-category="saas" aria-pressed="false">
+                SaaS
+              </button>
+            </div>
+
+            <div class="provider-block">
+              <p class="provider-label">Build brain</p>
+              <div class="provider-group" role="tablist" aria-label="Local builder">
+                <button class="provider-pill is-active" type="button" data-provider="claude" aria-pressed="true">
+                  Claude
+                </button>
+                <button class="provider-pill" type="button" data-provider="codex" aria-pressed="false">
+                  Codex
+                </button>
+              </div>
+              <p class="provider-copy" id="providerCopy">
+                Checking which local coding CLI is ready on this Mac.
+              </p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="ideas-section">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Today’s board</p>
+            <h2 id="sectionTitle">Top trending ideas</h2>
+          </div>
+          <p class="section-note" id="feedbackMessage" aria-live="polite">
+            Pulling fresh ideas now…
+          </p>
+        </div>
+
+        <div class="ideas-grid" id="ideasGrid" aria-live="polite"></div>
+      </section>
+    </main>
+
+    <div class="build-modal-backdrop" id="buildModalBackdrop" aria-hidden="true">
+      <section class="build-modal-sheet" role="dialog" aria-modal="true" aria-labelledby="buildModalTitle">
+        <div class="build-modal-header">
+          <div class="build-modal-copy-block">
+            <p class="eyebrow">Factory build</p>
+            <h2 class="build-modal-title" id="buildModalTitle">Starting build…</h2>
+            <p class="build-modal-copy" id="buildModalCopy">
+              Creating a new project folder and waking up your local builder.
+            </p>
+          </div>
+
+          <div class="build-modal-status-stack">
+            <div class="build-modal-pill" id="buildModalPill">Starting…</div>
+            <div class="build-modal-mark" id="buildModalMark" data-state="running" aria-hidden="true">
+              <span class="build-modal-mark-core" id="buildModalMarkCore"></span>
+            </div>
+          </div>
+        </div>
+
+        <div class="build-modal-divider" aria-hidden="true"></div>
+
+        <div class="build-modal-steps" id="buildModalSteps"></div>
+
+        <p class="build-modal-path" id="buildModalPath">Waiting for the first build path.</p>
+
+        <div class="build-modal-log-shell">
+          <p class="build-modal-log-label">Recent build notes</p>
+          <pre class="build-modal-log" id="buildModalLogModal">No build logs yet.</pre>
+        </div>
+
+        <div class="build-modal-actions">
+          <button class="secondary-button" id="buildModalCloseButton" type="button" disabled>
+            Working…
+          </button>
+          <button class="primary-button build-modal-open-button" id="buildModalOpenButton" type="button" disabled>
+            Open project folder
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,26 @@
+{
+  "name": "idea-nibble",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.mjs",
+  "description": "Micro SaaS idea generator for tiny MVPs with a local app factory shell.",
+  "dependencies": {
+    "@netlify/blobs": "^10.7.4"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.0.0",
+    "electron": "^42.0.1",
+    "netlify-cli": "^24.6.1"
+  },
+  "scripts": {
+    "dev": "node --watch server.mjs",
+    "dev:netlify": "npx netlify dev",
+    "desktop:dev": "electron desktop/main.mjs",
+    "desktop:pack": "electron-packager . IdeaNibble --platform=darwin --arch=arm64 --out=desktop-dist --overwrite --prune=true --ignore=desktop-dist --ignore=.git --ignore=netlify",
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
