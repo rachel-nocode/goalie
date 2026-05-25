@@ -14,8 +14,9 @@ import {
 
 loadEnvFiles();
 
-const rootDir = process.cwd();
-const publicDir = path.join(rootDir, "public");
+const rootDir = process.env.GOALIE_ROOT || process.cwd();
+const appPath = process.env.GOALIE_APP_PATH || rootDir;
+const publicDir = path.join(appPath, "public");
 const cacheDir = path.join(rootDir, ".cache");
 const cacheFile = path.join(cacheDir, "ideas.json");
 const votesFile = path.join(cacheDir, "votes.json");
@@ -1314,8 +1315,9 @@ function normalizeSavedIdea(idea) {
 }
 
 function loadEnvFiles() {
+  const configRoot = process.env.GOALIE_ROOT || process.cwd();
   for (const name of [".env.local", ".env"]) {
-    const fullPath = path.join(process.cwd(), name);
+    const fullPath = path.join(configRoot, name);
     if (!existsSync(fullPath)) {
       continue;
     }

@@ -174,8 +174,27 @@ function findNodeBinary() {
   return null;
 }
 
+function getRuntimePaths() {
+  if (!app.isPackaged) {
+    return {
+      appPath: rootDir,
+      workDir: rootDir,
+    };
+  }
+
+  return {
+    appPath: app.getAppPath(),
+    workDir: app.getPath("userData"),
+  };
+}
+
 function getServerLaunch(port) {
-  const serverPath = path.join(rootDir, "server.mjs");
+  const { appPath, workDir } = getRuntimePaths();
+  const serverPath = path.join(appPath, "server.mjs");
+  const runtimeEnv = {
+    GOALIE_ROOT: workDir,
+    GOALIE_APP_PATH: appPath,
+  };
 
   if (!app.isPackaged) {
     const nodeBinary = findNodeBinary();
@@ -183,7 +202,8 @@ function getServerLaunch(port) {
       return {
         command: nodeBinary,
         args: [serverPath],
-        env: getAugmentedEnv(port),
+        cwd: workDir,
+        env: getAugmentedEnv(port, runtimeEnv),
       };
     }
   }
@@ -191,7 +211,8 @@ function getServerLaunch(port) {
   return {
     command: process.execPath,
     args: [serverPath],
-    env: getAugmentedEnv(port, { ELECTRON_RUN_AS_NODE: "1" }),
+    cwd: workDir,
+    env: getAugmentedEnv(port, { ...runtimeEnv, ELECTRON_RUN_AS_NODE: "1" }),
   };
 }
 
@@ -201,7 +222,7 @@ async function startLocalServer(port) {
   const launch = getServerLaunch(port);
 
   serverProcess = spawn(launch.command, launch.args, {
-    cwd: rootDir,
+    cwd: launch.cwd,
     env: launch.env,
     stdio: ["ignore", "pipe", "pipe"],
   });
