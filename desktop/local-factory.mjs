@@ -15,7 +15,7 @@ export async function getLocalProviderState(rootDir) {
   };
 
   return {
-    desktopMode: process.env.WEDGERADAR_DESKTOP === "1",
+    desktopMode: process.env.GOALIE_DESKTOP === "1",
     preferredProvider: providers.claude.available ? "claude" : providers.codex.available ? "codex" : null,
     projectRoot: getProjectRoot(),
     providers,
@@ -98,6 +98,7 @@ export async function generateIdeasWithLocalCli({
 export async function startLocalBuild({
   rootDir,
   provider,
+  ideaId,
   idea,
   categoryLabel,
   intensityLabel,
@@ -141,6 +142,7 @@ export async function startLocalBuild({
 
   const job = {
     id: `build_${randomUUID()}`,
+    ideaId: ideaId || "",
     status: "queued",
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -301,7 +303,7 @@ async function getCodexStatus(rootDir) {
     key: "codex",
     label: "Codex CLI",
     available: true,
-    detail: "Ready through a clean IdeaNibble Codex runtime.",
+    detail: "Ready through a clean Goalie Codex runtime.",
   };
 }
 
@@ -352,7 +354,7 @@ async function requestClaudeIdeas({ prompt, cwd }) {
 async function requestCodexIdeas({ prompt, cwd, rootDir }) {
   try {
     const codexHome = await ensureCodexHome(rootDir);
-    const tempFile = path.join(os.tmpdir(), `idea-nibble-codex-${randomUUID()}.txt`);
+    const tempFile = path.join(os.tmpdir(), `goalie-codex-${randomUUID()}.txt`);
 
     const result = await runProcess("codex", [
       "exec",
@@ -426,11 +428,11 @@ function buildProjectPrompt({ idea, projectDir }) {
     "Create a README with what the product does, how to run it, and what is unfinished.",
     "If dependencies are needed, install them and leave the project runnable.",
     "Use clean file names and practical defaults. Avoid overengineering.",
-    "Idea title:",
+    "Goal title:",
     idea.title || "",
-    "The idea:",
+    "The goal:",
     idea.idea || "",
-    "The why:",
+    "Why now:",
     idea.why || "",
     "Starter prompt:",
     idea.starterPrompt || "",
@@ -466,7 +468,7 @@ async function ensureCodexHome(rootDir) {
 }
 
 function getProjectRoot() {
-  return path.join(os.homedir(), "IdeaNibble Projects");
+  return path.join(os.homedir(), "Goalie Projects");
 }
 
 function findCommandPath(command) {
@@ -543,6 +545,7 @@ function setJobState(job, nextState) {
 function serializeJob(job) {
   return {
     id: job.id,
+    ideaId: job.ideaId,
     status: job.status,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,

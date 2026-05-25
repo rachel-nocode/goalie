@@ -4,13 +4,16 @@ const state = {
   provider: "claude",
   providers: {},
   currentRequest: null,
-  voterId: getVoterId(),
   feedbackTimeout: null,
   defaultFeedback: "Pulling trend signals…",
   activeBuildId: "",
   activeBuildJob: null,
   buildPoller: null,
   buildModalVisible: false,
+  lastPayload: null,
+  activeTab: "goals",
+  savedCount: 0,
+  savedItems: [],
 };
 
 const modeSettings = [
@@ -18,7 +21,7 @@ const modeSettings = [
     min: 0,
     max: 24,
     label: "Normal",
-    copy: "Practical ideas that still feel current and sharp.",
+    copy: "Practical goals that still feel current and sharp.",
   },
   {
     min: 25,
@@ -50,6 +53,8 @@ const elements = {
   projectRootChip: document.querySelector("#projectRootChip"),
   sectionTitle: document.querySelector("#sectionTitle"),
   refreshButton: document.querySelector("#refreshButton"),
+  pageTabs: [...document.querySelectorAll(".page-tab")],
+  savedCount: document.querySelector("#savedCount"),
   intensityRange: document.querySelector("#intensityRange"),
   modeChip: document.querySelector("#modeChip"),
   modeCopy: document.querySelector("#modeCopy"),
@@ -67,6 +72,10 @@ const elements = {
   buildModalLog: document.querySelector("#buildModalLogModal"),
   buildModalCloseButton: document.querySelector("#buildModalCloseButton"),
   buildModalOpenButton: document.querySelector("#buildModalOpenButton"),
+  desktopBanner: document.querySelector("#desktopBanner"),
+  desktopBannerTitle: document.querySelector("#desktopBannerTitle"),
+  desktopBannerDetail: document.querySelector("#desktopBannerDetail"),
+  desktopBannerDismiss: document.querySelector("#desktopBannerDismiss"),
 };
 
 void bootstrap();
@@ -78,12 +87,29 @@ async function bootstrap() {
   renderLoadingState();
 
   await loadHealth();
+  await refreshSavedCount();
   await fetchIdeas();
 }
 
 function bindEvents() {
   elements.refreshButton.addEventListener("click", () => {
+    if (state.activeTab === "saved") {
+      fetchSavedGoals();
+      return;
+    }
+
     fetchIdeas({ refresh: true });
+  });
+
+  elements.pageTabs.forEach((button) => {
+    button.addEventListener("click", () => {
+      const nextTab = button.dataset.view || "goals";
+      if (nextTab === state.activeTab) {
+        return;
+      }
+
+      switchTab(nextTab);
+    });
   });
 
   elements.categoryButtons.forEach((button) => {
@@ -95,6 +121,7 @@ function bindEvents() {
 
       state.category = nextCategory;
       syncCategoryButtons();
+      ensureGoalsTab();
       renderLoadingState();
       fetchIdeas();
     });
@@ -107,6 +134,7 @@ function bindEvents() {
 
     window.clearTimeout(sliderTimeout);
     sliderTimeout = window.setTimeout(() => {
+      ensureGoalsTab();
       renderLoadingState();
       fetchIdeas();
     }, 250);
@@ -122,6 +150,7 @@ function bindEvents() {
 
       state.provider = nextProvider;
       syncProviderButtons();
+      ensureGoalsTab();
       renderLoadingState();
       fetchIdeas();
     });
@@ -145,6 +174,10 @@ function bindEvents() {
     }
 
     setBuildModalVisible(false);
+  });
+
+  elements.desktopBannerDismiss?.addEventListener("click", () => {
+    hideDesktopBanner(true);
   });
 
   document.addEventListener("keydown", (event) => {
@@ -178,6 +211,7 @@ function applyHealthPayload(payload) {
   }
 
   syncProviderButtons();
+  updateDesktopBanner(payload);
 
   const providerNotes = [];
   for (const providerKey of ["claude", "codex"]) {
@@ -189,7 +223,7 @@ function applyHealthPayload(payload) {
   }
 
   elements.providerCopy.textContent =
-    providerNotes.join(" ") || "This app can use your local Claude Code or Codex install.";
+    providerNotes.join(" ") || "Goalie uses your local Claude Code or Codex install.";
   elements.projectRootChip.textContent = payload.projectRoot
     ? `Builds in ${shortenPath(payload.projectRoot)}`
     : "Build root unavailable";
@@ -209,7 +243,7 @@ async function fetchIdeas({ refresh = false } = {}) {
   const requestId = Symbol("ideas");
   state.currentRequest = requestId;
 
-  setFeedback(refresh ? "Refreshing today’s batch…" : "Pulling trend signals…", { persist: true });
+  setFeedback(refresh ? "Refreshing today’s goals…" : "Pulling trend signals…", { persist: true });
 
   try {
     const url = new URL("/api/ideas", window.location.origin);
@@ -220,11 +254,7 @@ async function fetchIdeas({ refresh = false } = {}) {
       url.searchParams.set("refresh", "1");
     }
 
-    const response = await fetch(url, {
-      headers: {
-        "X-Voter-Id": state.voterId,
-      },
-    });
+    const response = await fetch(url);
 
     if (!response.ok) {
       throw new Error("The idea feed could not load.");
@@ -251,18 +281,191 @@ async function fetchIdeas({ refresh = false } = {}) {
 }
 
 function renderPayload(payload) {
+  state.lastPayload = payload;
   elements.generatedDate.textContent = payload.generatedDateLabel || "Today";
-  const sectionPrefix = payload.category === "all" ? "Top trending ideas" : `${payload.categoryLabel} ideas`;
-  elements.sectionTitle.textContent = `${sectionPrefix} for ${payload.intensityBand.toLowerCase()} mode`;
+
+  if (state.activeTab !== "goals") {
+    return;
+  }
+
+  updateGoalsSectionTitle(payload);
   elements.signalCountChip.textContent = `${payload.signalSummary.totalSignals} live signals`;
   elements.sourceCountChip.textContent = `${payload.signalSummary.topSources.length} active sources`;
-  elements.modelChip.textContent = payload.providerLabel || "Backup ideas";
+  elements.modelChip.textContent = payload.providerLabel || "Backup goals";
   if (payload.projectRoot) {
     elements.projectRootChip.textContent = `Builds in ${shortenPath(payload.projectRoot)}`;
   }
-  setFeedback("Fresh ideas loaded.", { persist: true });
+  setFeedback("Fresh goals loaded.", { persist: true });
 
   renderIdeas(payload.ideas || [], payload);
+}
+
+function updateGoalsSectionTitle(payload) {
+  const sectionPrefix = payload.category === "all" ? "Top trending goals" : `${payload.categoryLabel} goals`;
+  elements.sectionTitle.textContent = `${sectionPrefix} for ${payload.intensityBand.toLowerCase()} mode`;
+}
+
+function switchTab(nextTab) {
+  state.activeTab = nextTab;
+  syncPageTabs();
+
+  if (nextTab === "saved") {
+    elements.sectionTitle.textContent = "Saved goals";
+    setFeedback("Loading saved goals…", { persist: true });
+    fetchSavedGoals();
+    return;
+  }
+
+  if (state.lastPayload) {
+    updateGoalsSectionTitle(state.lastPayload);
+    setFeedback("Showing today’s goals.", { persist: true });
+    renderIdeas(state.lastPayload.ideas || [], state.lastPayload);
+    return;
+  }
+
+  renderLoadingState();
+  fetchIdeas();
+}
+
+function ensureGoalsTab() {
+  if (state.activeTab === "goals") {
+    return;
+  }
+
+  state.activeTab = "goals";
+  syncPageTabs();
+}
+
+function syncPageTabs() {
+  elements.pageTabs.forEach((button) => {
+    const isActive = button.dataset.view === state.activeTab;
+    button.classList.toggle("is-active", isActive);
+    button.setAttribute("aria-selected", String(isActive));
+  });
+}
+
+async function refreshSavedCount() {
+  try {
+    const response = await fetch("/api/saved");
+    if (!response.ok) {
+      return;
+    }
+
+    const payload = await response.json();
+    updateSavedCount(payload.items?.length || 0);
+  } catch {
+    updateSavedCount(0);
+  }
+}
+
+function updateSavedCount(count) {
+  state.savedCount = count;
+  if (elements.savedCount) {
+    elements.savedCount.textContent = String(count);
+  }
+}
+
+async function fetchSavedGoals() {
+  try {
+    const response = await fetch("/api/saved");
+    if (!response.ok) {
+      throw new Error("Saved goals could not load.");
+    }
+
+    const payload = await response.json();
+    state.savedItems = payload.items || [];
+    updateSavedCount(state.savedItems.length);
+    renderSavedGoals(state.savedItems);
+    setFeedback(
+      state.savedItems.length
+        ? `${state.savedItems.length} saved goal${state.savedItems.length === 1 ? "" : "s"} ready.`
+        : "No saved goals yet.",
+      { persist: true },
+    );
+  } catch (error) {
+    renderSavedError(error instanceof Error ? error.message : "Saved goals could not load.");
+  }
+}
+
+function renderSavedGoals(items) {
+  elements.ideasGrid.replaceChildren();
+
+  if (!items.length) {
+    const empty = document.createElement("article");
+    empty.className = "empty-state";
+    empty.textContent =
+      "No saved goals yet. Browse today’s goals and tap the bookmark to save one for later.";
+    elements.ideasGrid.append(empty);
+    return;
+  }
+
+  items.forEach((entry, index) => {
+    const payload = {
+      categoryLabel: entry.context?.categoryLabel || "General",
+      intensityBand: entry.context?.intensityBand || "Normal",
+    };
+    const idea = {
+      ...entry.idea,
+      saved: true,
+    };
+
+    elements.ideasGrid.append(buildIdeaCard(idea, payload, index, { fromSaved: true }));
+  });
+}
+
+function renderSavedError(message) {
+  elements.ideasGrid.replaceChildren();
+  const empty = document.createElement("article");
+  empty.className = "empty-state";
+  empty.textContent = message;
+  elements.ideasGrid.append(empty);
+  setFeedback(message, { persist: true });
+}
+
+async function setGoalSaved(idea, payload, saved) {
+  try {
+    const response = await fetch("/api/saved", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ideaId: idea.id,
+        saved,
+        idea: {
+          id: idea.id,
+          title: idea.title,
+          idea: idea.idea,
+          why: idea.why,
+          starterPrompt: idea.starterPrompt,
+          sourceMix: idea.sourceMix || [],
+          sourceTitles: idea.sourceTitles || [],
+          trendScore: idea.trendScore,
+        },
+        context: {
+          categoryLabel: payload.categoryLabel,
+          intensityBand: payload.intensityBand,
+        },
+      }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const result = await response.json();
+    idea.saved = saved;
+    updateSavedCount(result.count ?? state.savedCount);
+
+    if (state.activeTab === "saved" && !saved) {
+      state.savedItems = state.savedItems.filter((entry) => entry.idea?.id !== idea.id);
+      renderSavedGoals(state.savedItems);
+    }
+
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 function renderIdeas(ideas, payload) {
@@ -271,51 +474,56 @@ function renderIdeas(ideas, payload) {
   if (!ideas.length) {
     const empty = document.createElement("article");
     empty.className = "empty-state";
-    empty.textContent = "No ideas showed up yet. Try another category or hit refresh.";
+    empty.textContent = "No goals showed up yet. Try another category or hit refresh.";
     elements.ideasGrid.append(empty);
     return;
   }
 
   ideas.forEach((idea, index) => {
-    const card = document.createElement("article");
-    card.className = "idea-card";
-    card.style.setProperty("--rotation", `${index % 2 === 0 ? "-1.2deg" : "1.3deg"}`);
-
-    const cardTop = document.createElement("div");
-    cardTop.className = "idea-top";
-
-    const sourceRow = document.createElement("div");
-    sourceRow.className = "source-row";
-    idea.sourceMix.forEach((source) => {
-      const badge = document.createElement("span");
-      badge.className = "source-badge";
-      badge.textContent = source;
-      sourceRow.append(badge);
-    });
-
-    const score = document.createElement("span");
-    score.className = "score-pill";
-    score.textContent = `${idea.trendScore}/100`;
-
-    cardTop.append(sourceRow, score);
-
-    const title = document.createElement("h3");
-    title.textContent = idea.title;
-
-    const ideaBlock = createCardSection("The idea", idea.idea);
-    const whyBlock = createCardSection("The why", idea.why);
-    const promptBlock = createCardSection("AI prompt", idea.starterPrompt, { prompt: true });
-
-    const footer = document.createElement("div");
-    footer.className = "idea-footer";
-
-    const buildRow = createBuildRow(idea, payload);
-    const voteRow = createVoteRow(idea);
-
-    footer.append(buildRow, voteRow);
-    card.append(cardTop, title, ideaBlock, whyBlock, promptBlock, footer);
-    elements.ideasGrid.append(card);
+    elements.ideasGrid.append(buildIdeaCard(idea, payload, index));
   });
+}
+
+function buildIdeaCard(idea, payload, index, { fromSaved = false } = {}) {
+  const card = document.createElement("article");
+  card.className = "idea-card";
+  card.dataset.ideaId = idea.id;
+  if (idea.completed) {
+    card.classList.add("is-completed");
+  }
+  card.style.setProperty("--rotation", `${index % 2 === 0 ? "-1.2deg" : "1.3deg"}`);
+
+  const cardTop = document.createElement("div");
+  cardTop.className = "idea-top";
+
+  const sourceRow = document.createElement("div");
+  sourceRow.className = "source-row";
+  (idea.sourceMix || []).forEach((source) => {
+    const badge = document.createElement("span");
+    badge.className = "source-badge";
+    badge.textContent = source;
+    sourceRow.append(badge);
+  });
+
+  const score = document.createElement("span");
+  score.className = "score-pill";
+  score.textContent = `${idea.trendScore || 0}/100`;
+
+  cardTop.append(sourceRow, score);
+
+  const title = document.createElement("h3");
+  title.textContent = idea.title;
+
+  const ideaBlock = createCardSection("The goal", idea.idea);
+  const whyBlock = createCardSection("Why now", idea.why);
+  const promptBlock = createCardSection("Starter prompt", idea.starterPrompt, { prompt: true });
+
+  const footer = document.createElement("div");
+  footer.className = "idea-footer";
+  footer.append(createGoalActions(idea, payload, { fromSaved }));
+
+  card.append(cardTop, title, ideaBlock, whyBlock, promptBlock, footer);
+  return card;
 }
 
 function createCardSection(labelText, bodyText, { prompt = false } = {}) {
@@ -334,29 +542,85 @@ function createCardSection(labelText, bodyText, { prompt = false } = {}) {
   return block;
 }
 
-function createBuildRow(idea, payload) {
-  const row = document.createElement("div");
-  row.className = "build-row";
+function createGoalActions(idea, payload, { fromSaved = false } = {}) {
+  const fragment = document.createDocumentFragment();
 
-  const label = document.createElement("span");
-  label.className = "vote-label";
-  label.textContent = "Build";
+  if (idea.completed) {
+    const actions = document.createElement("div");
+    actions.className = "goal-actions";
 
-  const button = document.createElement("button");
-  button.className = "build-button";
-  button.type = "button";
-  button.textContent = "Build MVP";
+    const builtPill = document.createElement("span");
+    builtPill.className = "completed-pill";
+    builtPill.textContent = idea.completed.source === "build" ? "Built ✓" : "Done ✓";
+
+    const undoButton = document.createElement("button");
+    undoButton.className = "ghost-button";
+    undoButton.type = "button";
+    undoButton.textContent = "Undo";
+    undoButton.addEventListener("click", async () => {
+      undoButton.disabled = true;
+      const restored = await setGoalCompletion(idea.id, false);
+      if (restored !== null) {
+        idea.completed = null;
+        refreshIdeaCard(idea, payload, { fromSaved });
+        flashFeedback("Goal moved back to the board.");
+      } else {
+        undoButton.disabled = false;
+        flashFeedback("Could not undo completion.");
+      }
+    });
+
+    actions.append(builtPill, undoButton);
+    fragment.append(actions);
+    return fragment;
+  }
+
+  const actions = document.createElement("div");
+  actions.className = "goal-actions";
+
+  const startButton = document.createElement("button");
+  startButton.className = "goal-start-button";
+  startButton.type = "button";
+  startButton.textContent = "Start goal";
+
+  const saveButton = createSaveButton(idea, payload, { fromSaved });
+
+  const secondary = document.createElement("div");
+  secondary.className = "goal-secondary-actions";
+
+  const markDoneButton = document.createElement("button");
+  markDoneButton.className = "ghost-button";
+  markDoneButton.type = "button";
+  markDoneButton.textContent = "Mark done";
+  markDoneButton.addEventListener("click", async () => {
+    markDoneButton.disabled = true;
+    startButton.disabled = true;
+    saveButton.disabled = true;
+    const marked = await setGoalCompletion(idea.id, true, { source: "manual" });
+    if (marked?.completed) {
+      idea.completed = marked.completed;
+      refreshIdeaCard(idea, payload, { fromSaved });
+      flashFeedback("Goal checked off.");
+    } else {
+      markDoneButton.disabled = false;
+      startButton.disabled = false;
+      saveButton.disabled = false;
+      flashFeedback("Could not mark goal done.");
+    }
+  });
 
   const currentProvider = state.providers[state.provider];
   if (!currentProvider?.available) {
-    button.disabled = true;
-    button.textContent = "Builder offline";
+    startButton.disabled = true;
+    startButton.textContent = "Agent offline";
   }
 
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    button.textContent = "Starting…";
-    setFeedback("Starting local build…");
+  startButton.addEventListener("click", async () => {
+    startButton.disabled = true;
+    markDoneButton.disabled = true;
+    saveButton.disabled = true;
+    startButton.textContent = "Starting…";
+    setFeedback("Starting goal in your local agent…");
 
     try {
       const response = await fetch("/api/build", {
@@ -366,6 +630,7 @@ function createBuildRow(idea, payload) {
         },
         body: JSON.stringify({
           provider: state.provider,
+          ideaId: idea.id,
           categoryLabel: payload.categoryLabel,
           intensityLabel: payload.intensityBand,
           idea: {
@@ -385,131 +650,103 @@ function createBuildRow(idea, payload) {
       const job = await response.json();
       state.activeBuildId = job.id;
       state.activeBuildJob = job;
+      startButton.textContent = "Building…";
       setBuildModalVisible(true);
       renderBuildJob(job);
-      startBuildPolling(job.id);
-      flashFeedback("Build started.");
+      startBuildPolling(job.id, idea, payload, startButton, markDoneButton, saveButton, { fromSaved });
+      flashFeedback("Goal started.");
     } catch {
-      flashFeedback("The build could not be started.");
-      button.disabled = false;
-      button.textContent = "Build MVP";
+      flashFeedback("The goal could not be started.");
+      startButton.disabled = false;
+      markDoneButton.disabled = false;
+      saveButton.disabled = false;
+      startButton.textContent = "Start goal";
     }
   });
 
-  row.append(label, button);
-  return row;
+  actions.append(startButton, saveButton);
+  secondary.append(markDoneButton);
+  fragment.append(actions, secondary);
+  return fragment;
 }
 
-function createVoteRow(idea) {
-  const voteRow = document.createElement("div");
-  voteRow.className = "vote-row";
+function createSaveButton(idea, payload, { fromSaved = false } = {}) {
+  const saveButton = document.createElement("button");
+  saveButton.className = "goal-save-button";
+  saveButton.type = "button";
+  saveButton.setAttribute("aria-label", idea.saved ? "Remove saved goal" : "Save goal for later");
+  saveButton.setAttribute("aria-pressed", String(Boolean(idea.saved)));
+  saveButton.innerHTML = bookmarkIcon(Boolean(idea.saved));
+  saveButton.classList.toggle("is-saved", Boolean(idea.saved));
 
-  const voteLabel = document.createElement("span");
-  voteLabel.className = "vote-label";
-  voteLabel.textContent = "Vote";
+  saveButton.addEventListener("click", async () => {
+    const nextSaved = !idea.saved;
+    saveButton.disabled = true;
+    const result = await setGoalSaved(idea, payload, nextSaved);
 
-  const voteCluster = document.createElement("div");
-  voteCluster.className = "vote-cluster";
-
-  const upvote = createVoteControl({
-    active: idea.userVote === "up",
-    count: idea.votes?.up || 0,
-    direction: "up",
-    label: "Upvote idea",
-  });
-
-  const downvote = createVoteControl({
-    active: idea.userVote === "down",
-    count: idea.votes?.down || 0,
-    direction: "down",
-    label: "Downvote idea",
-  });
-
-  const updateControls = () => {
-    upvote.count.textContent = String(idea.votes?.up || 0);
-    downvote.count.textContent = String(idea.votes?.down || 0);
-    upvote.button.classList.toggle("is-active-up", idea.userVote === "up");
-    downvote.button.classList.toggle("is-active-down", idea.userVote === "down");
-    upvote.button.setAttribute("aria-pressed", String(idea.userVote === "up"));
-    downvote.button.setAttribute("aria-pressed", String(idea.userVote === "down"));
-  };
-
-  const submitVote = async (direction, controls) => {
-    controls.up.button.disabled = true;
-    controls.down.button.disabled = true;
-    setFeedback("Saving vote…");
-
-    try {
-      const response = await fetch("/api/vote", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Voter-Id": state.voterId,
-        },
-        body: JSON.stringify({
-          ideaId: idea.id,
-          voterId: state.voterId,
-          direction,
-        }),
-      });
-
-      if (!response.ok) {
-        throw new Error("Vote failed.");
-      }
-
-      const payload = await response.json();
-      idea.votes = payload.votes;
-      idea.userVote = payload.userVote;
-      updateControls();
-      flashFeedback("Vote saved.");
-    } catch {
-      flashFeedback("Vote could not be saved.");
-    } finally {
-      controls.up.button.disabled = false;
-      controls.down.button.disabled = false;
+    if (result) {
+      saveButton.classList.toggle("is-saved", nextSaved);
+      saveButton.setAttribute("aria-label", nextSaved ? "Remove saved goal" : "Save goal for later");
+      saveButton.setAttribute("aria-pressed", String(nextSaved));
+      saveButton.innerHTML = bookmarkIcon(nextSaved);
+      flashFeedback(nextSaved ? "Goal saved for later." : "Removed from saved goals.");
+    } else {
+      flashFeedback("Could not update saved goal.");
     }
-  };
 
-  upvote.button.addEventListener("click", () => {
-    const nextDirection = idea.userVote === "up" ? "clear" : "up";
-    submitVote(nextDirection, { up: upvote, down: downvote });
+    saveButton.disabled = false;
   });
 
-  downvote.button.addEventListener("click", () => {
-    const nextDirection = idea.userVote === "down" ? "clear" : "down";
-    submitVote(nextDirection, { up: upvote, down: downvote });
-  });
-
-  voteCluster.append(upvote.wrapper, downvote.wrapper);
-  voteRow.append(voteLabel, voteCluster);
-  updateControls();
-
-  return voteRow;
+  return saveButton;
 }
 
-function createVoteControl({ active, count, direction, label }) {
-  const wrapper = document.createElement("div");
-  wrapper.className = "vote-control";
+function bookmarkIcon(filled) {
+  if (filled) {
+    return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="currentColor" d="M6 2h12a2 2 0 0 1 2 2v18l-8-5-8 5V4a2 2 0 0 1 2-2z"/></svg>`;
+  }
 
-  const button = document.createElement("button");
-  button.className = "vote-button";
-  button.type = "button";
-  button.dataset.direction = direction;
-  button.setAttribute("aria-label", label);
-  button.setAttribute("aria-pressed", String(active));
-  button.innerHTML = direction === "up" ? "&#128077;" : "&#128078;";
+  return `<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path fill="none" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" d="M6 3h12a2 2 0 0 1 2 2v16l-8-5-8 5V5a2 2 0 0 1 2-2z"/></svg>`;
+}
 
-  const countLabel = document.createElement("span");
-  countLabel.className = "vote-count";
-  countLabel.textContent = String(count);
+function refreshIdeaCard(idea, payload, { fromSaved = false } = {}) {
+  const card = elements.ideasGrid.querySelector(`[data-idea-id="${CSS.escape(idea.id)}"]`);
+  if (!card) {
+    return;
+  }
 
-  wrapper.append(button, countLabel);
+  card.classList.toggle("is-completed", Boolean(idea.completed));
 
-  return {
-    wrapper,
-    button,
-    count: countLabel,
-  };
+  const footer = card.querySelector(".idea-footer");
+  if (!footer) {
+    return;
+  }
+
+  footer.replaceChildren(createGoalActions(idea, payload, { fromSaved }));
+}
+
+async function setGoalCompletion(ideaId, completed, { source = "manual", projectDir = "" } = {}) {
+  try {
+    const response = await fetch("/api/complete", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        ideaId,
+        completed,
+        source,
+        projectDir,
+      }),
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return await response.json();
+  } catch {
+    return null;
+  }
 }
 
 function renderLoadingState() {
@@ -544,8 +781,8 @@ function renderError(message) {
 }
 
 function renderBuildIdle() {
-  elements.buildModalTitle.textContent = "Starting build…";
-  elements.buildModalCopy.textContent = "Creating a new project folder and waking up your local builder.";
+  elements.buildModalTitle.textContent = "Starting goal…";
+  elements.buildModalCopy.textContent = "Creating a new project folder and waking up your local agent.";
   elements.buildModalPill.textContent = "Starting…";
   elements.buildModalPath.textContent = "Waiting for the first build path.";
   elements.buildModalLog.textContent = "No build logs yet.";
@@ -565,7 +802,15 @@ function renderBuildJob(job) {
   }
 }
 
-function startBuildPolling(jobId) {
+function startBuildPolling(
+  jobId,
+  idea = null,
+  payload = null,
+  startButton = null,
+  markDoneButton = null,
+  saveButton = null,
+  { fromSaved = false } = {},
+) {
   if (!jobId) {
     return;
   }
@@ -585,7 +830,40 @@ function startBuildPolling(jobId) {
       if (job.status === "completed" || job.status === "failed") {
         window.clearInterval(state.buildPoller);
         state.buildPoller = null;
-        flashFeedback(job.status === "completed" ? "Build finished." : "Build stopped with an error.");
+
+        if (job.status === "completed") {
+          flashFeedback("Goal finished.");
+
+          const targetIdeaId = job.ideaId || idea?.id;
+          if (targetIdeaId && state.lastPayload) {
+            const marked = await setGoalCompletion(targetIdeaId, true, {
+              source: "build",
+              projectDir: job.projectDir || "",
+            });
+
+            if (marked?.completed) {
+              const boardIdea =
+                idea ||
+                state.lastPayload.ideas?.find((entry) => entry.id === targetIdeaId) ||
+                { id: targetIdeaId, completed: marked.completed };
+
+              boardIdea.completed = marked.completed;
+              refreshIdeaCard(boardIdea, payload || state.lastPayload || {}, { fromSaved });
+            }
+          }
+        } else {
+          flashFeedback("Goal stopped with an error.");
+          if (startButton) {
+            startButton.disabled = false;
+            startButton.textContent = "Start goal";
+          }
+          if (markDoneButton) {
+            markDoneButton.disabled = false;
+          }
+          if (saveButton) {
+            saveButton.disabled = false;
+          }
+        }
       }
     } catch {
       return;
@@ -645,7 +923,7 @@ function describeBuildJob(job) {
     return {
       pill: "Done",
       title: `${job.ideaTitle} is ready`,
-      copy: "The first MVP finished building. Open the folder, run it locally, and inspect what the builder shipped.",
+      copy: "Your agent finished the first pass. Open the folder, run it locally, and inspect what shipped.",
       markState: "completed",
       markGlyph: "✓",
       steps: buildStepsForStatus(job),
@@ -656,7 +934,7 @@ function describeBuildJob(job) {
     return {
       pill: "Needs help",
       title: `${job.ideaTitle} hit a snag`,
-      copy: "The build stopped before the handoff. You can still open the folder and inspect the latest notes.",
+      copy: "The goal stopped before handoff. You can still open the folder and inspect the latest notes.",
       markState: "failed",
       markGlyph: "!",
       steps: buildStepsForStatus(job),
@@ -667,7 +945,7 @@ function describeBuildJob(job) {
     return {
       pill: "Starting…",
       title: `Starting ${job.ideaTitle}`,
-      copy: `IdeaNibble created the project folder and is waking up ${job.providerLabel}.`,
+      copy: `Goalie created the project folder and is waking up ${job.providerLabel}.`,
       markState: "running",
       markGlyph: "",
       steps: buildStepsForStatus(job),
@@ -677,7 +955,7 @@ function describeBuildJob(job) {
   return {
     pill: "Building…",
     title: `Building ${job.ideaTitle}`,
-    copy: `${job.providerLabel} is writing the first MVP now. Keep this page open while the build finishes.`,
+    copy: `${job.providerLabel} is working on this goal now. Keep Goalie open while the build finishes.`,
     markState: "running",
     markGlyph: "",
     steps: buildStepsForStatus(job),
@@ -826,31 +1104,50 @@ function firstAvailableProvider() {
   return ["claude", "codex"].find((key) => state.providers[key]?.available) || "";
 }
 
+function updateDesktopBanner(payload) {
+  if (!payload.desktopMode || !elements.desktopBanner) {
+    return;
+  }
+
+  if (window.localStorage.getItem("goalie-desktop-banner-dismissed") === "1") {
+    hideDesktopBanner(false);
+    return;
+  }
+
+  const readyAgents = ["claude", "codex"].filter((key) => payload.providers?.[key]?.available);
+  const missingAgents = ["claude", "codex"].filter((key) => payload.providers?.[key] && !payload.providers[key].available);
+
+  if (readyAgents.length) {
+    const labels = readyAgents.map((key) => payload.providers[key].label);
+    elements.desktopBannerTitle.textContent =
+      labels.length === 2 ? "Claude Code and Codex are ready" : `${labels[0]} is ready`;
+    elements.desktopBannerDetail.textContent = `Projects build into ${shortenPath(payload.projectRoot || "~/Goalie Projects")} using your existing subscription.`;
+  } else {
+    elements.desktopBannerTitle.textContent = "Install a local agent to start building";
+    elements.desktopBannerDetail.textContent =
+      missingAgents.map((key) => payload.providers[key].detail).join(" ") ||
+      "Install Claude Code or Codex CLI, then reopen Goalie.";
+  }
+
+  elements.desktopBanner.classList.remove("is-hidden");
+}
+
+function hideDesktopBanner(persist) {
+  if (!elements.desktopBanner) {
+    return;
+  }
+
+  elements.desktopBanner.classList.add("is-hidden");
+
+  if (persist) {
+    try {
+      window.localStorage.setItem("goalie-desktop-banner-dismissed", "1");
+    } catch {
+      // Ignore storage failures.
+    }
+  }
+}
+
 function shortenPath(fullPath) {
   return fullPath.replace(/^\/Users\/[^/]+/, "~");
-}
-
-function getVoterId() {
-  const storageKey = "idea-machine-voter-id";
-
-  try {
-    const storedValue = window.localStorage.getItem(storageKey);
-    if (storedValue) {
-      return storedValue;
-    }
-
-    const nextValue = createVoterId();
-    window.localStorage.setItem(storageKey, nextValue);
-    return nextValue;
-  } catch {
-    return createVoterId();
-  }
-}
-
-function createVoterId() {
-  if (window.crypto?.randomUUID) {
-    return window.crypto.randomUUID().replace(/[^a-z0-9-]/gi, "").toLowerCase();
-  }
-
-  return `visitor-${Math.random().toString(36).slice(2, 12)}`;
 }

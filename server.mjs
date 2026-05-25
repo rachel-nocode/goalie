@@ -19,6 +19,8 @@ const publicDir = path.join(rootDir, "public");
 const cacheDir = path.join(rootDir, ".cache");
 const cacheFile = path.join(cacheDir, "ideas.json");
 const votesFile = path.join(cacheDir, "votes.json");
+const completedFile = path.join(cacheDir, "completed.json");
+const savedFile = path.join(cacheDir, "saved.json");
 const port = Number.parseInt(process.env.PORT || "3000", 10);
 const IDEA_COUNT = 12;
 const cacheVersion = "v8";
@@ -140,6 +142,16 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (requestUrl.pathname === "/api/complete") {
+      await handleCompleteRequest(req, res);
+      return;
+    }
+
+    if (requestUrl.pathname === "/api/saved") {
+      await handleSavedRequest(req, res);
+      return;
+    }
+
     if (requestUrl.pathname === "/api/build") {
       await handleBuildRequest(req, requestUrl, res);
       return;
@@ -176,7 +188,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(port, () => {
-  console.log(`IdeaNibble running at http://localhost:${port}`);
+  console.log(`Goalie running at http://localhost:${port}`);
 });
 
 async function handleIdeasRequest(req, requestUrl, res) {
@@ -298,7 +310,112 @@ async function handleVoteRequest(req, res) {
   });
 }
 
-async function handleBuildRequest(req, requestUrl, res) {
+async function handleSavedRequest(req, res) {
+  if (req.method === "GET") {
+    sendJson(res, 200, {
+      items: await listSavedGoals(),
+    });
+    return;
+  }
+
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Use GET to list saved goals or POST to update them." });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJson(res, 400, { error: "Saved goal request body is invalid." });
+    return;
+  }
+
+  const ideaId = normalizeIdeaId(body.ideaId);
+  const saved = body.saved === true;
+
+  if (!ideaId) {
+    sendJson(res, 400, { error: "Saved goal request is missing a valid goal id." });
+    return;
+  }
+
+  const savedStore = await readSavedStore();
+
+  if (!saved) {
+    delete savedStore[ideaId];
+  } else {
+    const idea = normalizeSavedIdea(body.idea);
+    if (!idea.title || !idea.idea) {
+      sendJson(res, 400, { error: "Saved goal request is missing goal details." });
+      return;
+    }
+
+    savedStore[ideaId] = {
+      savedAt: new Date().toISOString(),
+      idea: {
+        ...idea,
+        id: ideaId,
+      },
+      context: {
+        categoryLabel: cleanSentence(body.context?.categoryLabel) || "General",
+        intensityBand: cleanSentence(body.context?.intensityBand) || "Normal",
+      },
+    };
+  }
+
+  await writeSavedStore(savedStore);
+
+  sendJson(res, 200, {
+    ideaId,
+    saved,
+    count: Object.keys(savedStore).length,
+  });
+}
+
+async function handleCompleteRequest(req, res) {
+  if (req.method !== "POST") {
+    sendJson(res, 405, { error: "Use POST to update goal completion." });
+    return;
+  }
+
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    sendJson(res, 400, { error: "Completion request body is invalid." });
+    return;
+  }
+
+  const ideaId = normalizeIdeaId(body.ideaId);
+  const completed = body.completed === true;
+  const projectDir = cleanSentence(body.projectDir);
+
+  if (!ideaId) {
+    sendJson(res, 400, { error: "Completion request is missing a valid goal id." });
+    return;
+  }
+
+  const completedStore = await readCompletedStore();
+
+  if (!completed) {
+    delete completedStore[ideaId];
+  } else {
+    completedStore[ideaId] = {
+      completedAt: new Date().toISOString(),
+      projectDir: projectDir || "",
+      source: body.source === "build" ? "build" : "manual",
+    };
+  }
+
+  await writeCompletedStore(completedStore);
+
+  sendJson(res, 200, {
+    ideaId,
+    completed: completed ? completedStore[ideaId] : null,
+  });
+}
+
+async function handleBuildRequest(req, res) {
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "Use POST for builds." });
     return;
@@ -326,6 +443,7 @@ async function handleBuildRequest(req, requestUrl, res) {
     const job = await startLocalBuild({
       rootDir,
       provider,
+      ideaId: normalizeIdeaId(body.ideaId),
       idea,
       categoryLabel,
       intensityLabel,
@@ -1051,12 +1169,15 @@ function buildIdeaId(cacheKey, index, title) {
 
 async function withVoteData(payload, voterId, cacheKey) {
   const votesStore = await readVotesStore();
+  const completedStore = await readCompletedStore();
+  const savedStore = await readSavedStore();
 
   return {
     ...payload,
     ideas: (payload.ideas || []).map((idea, index) => {
       const stableIdea = attachIdeaIdentity(idea, cacheKey, index);
       const record = normalizeVoteRecord(votesStore[stableIdea.id]);
+      const completed = completedStore[stableIdea.id] || null;
 
       return {
         ...stableIdea,
@@ -1065,6 +1186,8 @@ async function withVoteData(payload, voterId, cacheKey) {
           down: record.down,
         },
         userVote: voterId ? record.voters[voterId] || null : null,
+        completed,
+        saved: Boolean(savedStore[stableIdea.id]),
       };
     }),
   };
@@ -1129,6 +1252,65 @@ async function readVotesStore() {
 async function writeVotesStore(payload) {
   mkdirSync(cacheDir, { recursive: true });
   await fs.writeFile(votesFile, JSON.stringify(payload, null, 2), "utf8");
+}
+
+async function readCompletedStore() {
+  try {
+    return JSON.parse(await fs.readFile(completedFile, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+async function writeCompletedStore(payload) {
+  mkdirSync(cacheDir, { recursive: true });
+  await fs.writeFile(completedFile, JSON.stringify(payload, null, 2), "utf8");
+}
+
+async function readSavedStore() {
+  try {
+    return JSON.parse(await fs.readFile(savedFile, "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+async function writeSavedStore(payload) {
+  mkdirSync(cacheDir, { recursive: true });
+  await fs.writeFile(savedFile, JSON.stringify(payload, null, 2), "utf8");
+}
+
+async function listSavedGoals() {
+  const savedStore = await readSavedStore();
+
+  return Object.entries(savedStore)
+    .map(([ideaId, record]) => ({
+      ideaId,
+      savedAt: record.savedAt,
+      idea: {
+        ...record.idea,
+        id: record.idea?.id || ideaId,
+      },
+      context: record.context || {},
+    }))
+    .sort((left, right) => new Date(right.savedAt).getTime() - new Date(left.savedAt).getTime());
+}
+
+function normalizeSavedIdea(idea) {
+  return {
+    id: normalizeIdeaId(idea?.id),
+    title: cleanSentence(idea?.title),
+    idea: cleanSentence(idea?.idea),
+    why: cleanSentence(idea?.why),
+    starterPrompt: cleanSentence(idea?.starterPrompt),
+    sourceMix: Array.isArray(idea?.sourceMix)
+      ? idea.sourceMix.map((entry) => cleanSentence(entry)).filter(Boolean).slice(0, 6)
+      : [],
+    sourceTitles: Array.isArray(idea?.sourceTitles)
+      ? idea.sourceTitles.map((entry) => cleanSentence(entry)).filter(Boolean).slice(0, 8)
+      : [],
+    trendScore: clamp(Number.parseInt(String(idea?.trendScore ?? "0"), 10) || 0, 0, 100),
+  };
 }
 
 function loadEnvFiles() {

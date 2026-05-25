@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Goalie</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: linear-gradient(180deg, #d2ece0 0%, #c1e2d3 100%);
+        color: #171717;
+        font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+      }
+
+      .drag-strip {
+        position: fixed;
+        inset: 0 0 auto;
+        height: 56px;
+        -webkit-app-region: drag;
+        z-index: 10;
+      }
+
+      .shell {
+        min-height: 100%;
+        display: grid;
+        place-items: center;
+        padding: 4rem 2rem 2rem;
+        text-align: center;
+      }
+
+      .goalie-mascot {
+        width: 5.5rem;
+        height: auto;
+        margin: 0 auto 1rem;
+        animation: goalie-bounce 2.8s ease-in-out infinite;
+        filter: drop-shadow(0 4px 0 rgba(17, 17, 17, 0.1));
+      }
+
+      @keyframes goalie-bounce {
+        0%,
+        100% {
+          transform: translateY(0);
+        }
+
+        50% {
+          transform: translateY(-6px);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .goalie-mascot {
+          animation: none;
+        }
+      }
+
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.6rem;
+      }
+
+      p {
+        margin: 0;
+        opacity: 0.72;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="drag-strip" aria-hidden="true"></div>
+    <div class="shell">
+      <div>
+        <img
+          class="goalie-mascot"
+          src="./goalie-icon-main.png"
+          width="88"
+          height="88"
+          alt=""
+          aria-hidden="true"
+        />
+        <h1>Starting Goalie…</h1>
+        <p>Waking up your local server and agents.</p>
+      </div>
+    </div>
+  </body>
+</html>

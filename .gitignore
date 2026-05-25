@@ -1,5 +1,7 @@
 .env
 .env.local
+.env.*
+!.env.example
 .cache
 .codex
 .netlify
@@ -7,3 +9,8 @@
 node_modules
 dist
 desktop-dist
+desktop/icon.iconset
+release
+.DS_Store
+*.log
+Thumbs.db

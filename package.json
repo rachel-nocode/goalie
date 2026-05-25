@@ -1,14 +1,16 @@
 {
-  "name": "idea-nibble",
+  "name": "goalie",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "desktop/main.mjs",
-  "description": "Micro SaaS idea generator for tiny MVPs with a local app factory shell.",
+  "productName": "Goalie",
+  "description": "Super factory for agent goals — trend-fed ideas, loop-ready prompts, and local Claude Code or Codex builds.",
   "dependencies": {
     "@netlify/blobs": "^10.7.4"
   },
   "devDependencies": {
+    "@electron/osx-sign": "^2.4.0",
     "@electron/packager": "^20.0.0",
     "electron": "^42.0.1",
     "netlify-cli": "^24.6.1"
@@ -16,8 +18,10 @@
   "scripts": {
     "dev": "node --watch server.mjs",
     "dev:netlify": "npx netlify dev",
-    "desktop:dev": "electron desktop/main.mjs",
-    "desktop:pack": "electron-packager . IdeaNibble --platform=darwin --arch=arm64 --out=desktop-dist --overwrite --prune=true --ignore=desktop-dist --ignore=.git --ignore=netlify",
+    "desktop:dev": "node desktop/dev.mjs",
+    "desktop:pack": "electron-packager . Goalie --platform=darwin --arch=arm64 --out=desktop-dist --overwrite --prune=true --ignore=desktop-dist --ignore=release --ignore=.git --ignore=netlify --app-bundle-id=io.goalie.app --icon=desktop/icon",
+    "desktop:release": "node desktop/release.mjs",
+    "icons:build": "node desktop/build-icons.mjs",
     "start": "node server.mjs"
   },
   "engines": {
