@@ -61,7 +61,7 @@ Most people never need these.
 
 ## Privacy
 
-Goalie runs locally. Saved goals, caches, and build history live in `.cache/` on your Mac — nothing is committed to git.
+Goalie runs locally. Saved goals, caches, and build history live in `~/Library/Application Support/Goalie/.cache/` when using the installed app — nothing leaves your Mac or hits git.
 
 ## License
 
