@@ -24,7 +24,9 @@ const completedFile = path.join(cacheDir, "completed.json");
 const savedFile = path.join(cacheDir, "saved.json");
 const port = Number.parseInt(process.env.PORT || "3000", 10);
 const IDEA_COUNT = 12;
+const INITIAL_IDEA_COUNT = 2;
 const cacheVersion = "v8";
+const generationJobs = new Map();
 
 const CATEGORY_CONFIG = {
   all: {
@@ -154,7 +156,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (requestUrl.pathname === "/api/build") {
-      await handleBuildRequest(req, requestUrl, res);
+      await handleBuildRequest(req, res);
       return;
     }
 
@@ -199,28 +201,141 @@ async function handleIdeasRequest(req, requestUrl, res) {
   const intensityValue = clamp(Number.parseInt(requestUrl.searchParams.get("intensity") || "12", 10), 0, 100);
   const intensityBand = getIntensityBand(intensityValue);
   const refresh = requestUrl.searchParams.get("refresh") === "1";
+  const limit = clamp(Number.parseInt(requestUrl.searchParams.get("limit") || String(IDEA_COUNT), 10), 1, IDEA_COUNT);
   const todayKey = new Date().toISOString().slice(0, 10);
   const cacheKey = `${cacheVersion}:${todayKey}:${category}:${intensityBand.key}:${provider || "auto"}`;
   const localState = await getLocalProviderState(rootDir);
 
+  if (refresh) {
+    generationJobs.delete(cacheKey);
+    await deleteCacheEntry(cacheKey);
+  }
+
   if (!refresh) {
     const cachedPayload = await readCacheEntry(cacheKey);
     if (cachedPayload) {
-      sendJson(res, 200, await withVoteData(cachedPayload, voterId, cacheKey));
+      sendJson(
+        res,
+        200,
+        await withVoteData(formatIdeasResponse(cachedPayload, limit), voterId, cacheKey),
+      );
       return;
     }
   }
 
-  const collected = await collectTrendSignals(category);
-  const generated = await generateIdeas({
+  let job = generationJobs.get(cacheKey);
+  if (!job) {
+    job = startIdeasGeneration({
+      cacheKey,
+      category,
+      provider,
+      intensityValue,
+      intensityBand,
+      localState,
+    });
+  }
+
+  if (limit <= INITIAL_IDEA_COUNT) {
+    const previewPayload = job.complete
+      ? formatIdeasResponse(job.complete, limit)
+      : formatIdeasResponse(job.preview, limit);
+    sendJson(res, 200, await withVoteData(previewPayload, voterId, cacheKey));
+    return;
+  }
+
+  try {
+    if (!job.complete) {
+      await job.promise;
+    }
+  } catch (error) {
+    sendJson(res, 500, {
+      error: "Ideas could not be generated.",
+      details: error instanceof Error ? error.message : "Unknown error",
+    });
+    return;
+  }
+
+  const payload = job.complete || (await readCacheEntry(cacheKey));
+  if (!payload) {
+    sendJson(res, 500, { error: "Ideas could not be generated." });
+    return;
+  }
+
+  sendJson(res, 200, await withVoteData(formatIdeasResponse(payload, limit), voterId, cacheKey));
+}
+
+function startIdeasGeneration({ cacheKey, category, provider, intensityValue, intensityBand, localState }) {
+  const preview = buildQuickIdeasPayload({
+    cacheKey,
     category,
-    provider,
     intensityValue,
     intensityBand,
-    signals: collected.signals,
+    provider,
+    localState,
   });
 
-  const payload = {
+  const job = {
+    preview,
+    complete: null,
+    promise: null,
+  };
+
+  job.promise = (async () => {
+    const collected = await collectTrendSignals(category);
+    const generated = await generateIdeas({
+      category,
+      provider,
+      intensityValue,
+      intensityBand,
+      signals: collected.signals,
+    });
+
+    const payload = {
+      category,
+      categoryLabel: CATEGORY_CONFIG[category].label,
+      generatedAt: new Date().toISOString(),
+      generatedDateLabel: formatDateLabel(new Date()),
+      intensity: intensityValue,
+      intensityBand: intensityBand.label,
+      groqEnabled: Boolean(process.env.GROQ_API_KEY),
+      provider: generated.provider,
+      providerLabel: generated.providerLabel,
+      providers: localState.providers,
+      projectRoot: localState.projectRoot,
+      desktopMode: localState.desktopMode,
+      unavailableSources: generated.warning
+        ? [...collected.unavailableSources, generated.warning]
+        : collected.unavailableSources,
+      signalSummary: summarizeSignals(collected.signals),
+      ideas: generated.ideas.map((idea, index) => attachIdeaIdentity(idea, cacheKey, index)),
+      partial: false,
+      totalIdeas: IDEA_COUNT,
+    };
+
+    await writeCacheEntry(cacheKey, payload);
+    job.complete = payload;
+    return payload;
+  })().catch((error) => {
+    generationJobs.delete(cacheKey);
+    throw error;
+  });
+
+  generationJobs.set(cacheKey, job);
+  return job;
+}
+
+function buildQuickIdeasPayload({ cacheKey, category, intensityValue, intensityBand, provider, localState }) {
+  const signals = buildBackupSignals(category);
+  const ideas = generateFallbackIdeas({
+    category,
+    intensityValue,
+    intensityBand,
+    signals,
+  })
+    .slice(0, INITIAL_IDEA_COUNT)
+    .map((idea, index) => attachIdeaIdentity(idea, cacheKey, index));
+
+  return {
     category,
     categoryLabel: CATEGORY_CONFIG[category].label,
     generatedAt: new Date().toISOString(),
@@ -228,20 +343,29 @@ async function handleIdeasRequest(req, requestUrl, res) {
     intensity: intensityValue,
     intensityBand: intensityBand.label,
     groqEnabled: Boolean(process.env.GROQ_API_KEY),
-    provider: generated.provider,
-    providerLabel: generated.providerLabel,
+    provider: provider || localState.preferredProvider || "fallback",
+    providerLabel: "Preview goals",
     providers: localState.providers,
     projectRoot: localState.projectRoot,
     desktopMode: localState.desktopMode,
-    unavailableSources: generated.warning
-      ? [...collected.unavailableSources, generated.warning]
-      : collected.unavailableSources,
-    signalSummary: summarizeSignals(collected.signals),
-    ideas: generated.ideas.map((idea, index) => attachIdeaIdentity(idea, cacheKey, index)),
+    unavailableSources: ["Fetching live trend signals and generating full goals…"],
+    signalSummary: summarizeSignals(signals),
+    ideas,
+    partial: true,
+    totalIdeas: IDEA_COUNT,
   };
+}
 
-  await writeCacheEntry(cacheKey, payload);
-  sendJson(res, 200, await withVoteData(payload, voterId, cacheKey));
+function formatIdeasResponse(payload, limit = IDEA_COUNT) {
+  const ideas = Array.isArray(payload?.ideas) ? payload.ideas : [];
+  const totalIdeas = payload.totalIdeas || ideas.length;
+
+  return {
+    ...payload,
+    ideas: ideas.slice(0, limit),
+    partial: Boolean(payload.partial) || totalIdeas > limit,
+    totalIdeas,
+  };
 }
 
 async function handleVoteRequest(req, res) {
@@ -1240,6 +1364,20 @@ async function writeCacheEntry(key, payload) {
 
   currentCache[key] = payload;
   await fs.writeFile(cacheFile, JSON.stringify(currentCache, null, 2), "utf8");
+}
+
+async function deleteCacheEntry(key) {
+  try {
+    const currentCache = JSON.parse(await fs.readFile(cacheFile, "utf8"));
+    if (!currentCache[key]) {
+      return;
+    }
+
+    delete currentCache[key];
+    await fs.writeFile(cacheFile, JSON.stringify(currentCache, null, 2), "utf8");
+  } catch {
+    // Cache file may not exist yet.
+  }
 }
 
 async function readVotesStore() {

@@ -194,13 +194,22 @@ async function runBuildJob({ rootDir, job, idea }) {
   setJobState(job, "running");
   appendJobLog(job, `Build started for "${job.ideaTitle}".`);
 
+  job.logPath = path.join(job.projectDir, ".goalie-build.log");
+  await fs.writeFile(job.logPath, `Goalie build log for ${job.ideaTitle}\n\n`, "utf8");
+  openBuildLogTerminal(job.projectDir, job.logPath, job.providerLabel);
+
   const prompt = buildProjectPrompt({ idea, projectDir: job.projectDir });
 
   try {
     let result;
 
     if (job.provider === "claude") {
-      result = await runProcess("claude", [
+      const claudePath = findCommandPath("claude");
+      if (!claudePath) {
+        throw new Error("Claude Code is not installed.");
+      }
+
+      result = await runProcess(claudePath, [
         "-p",
         "--model",
         "sonnet",
@@ -212,16 +221,25 @@ async function runBuildJob({ rootDir, job, idea }) {
         prompt,
       ], {
         cwd: job.projectDir,
+        env: {
+          ...process.env,
+          PATH: getAugmentedPath(),
+        },
         onStdout: (line) => appendJobLog(job, line),
         onStderr: (line) => appendJobLog(job, line),
       });
 
       job.summary = cleanSentence(result.stdout);
     } else {
+      const codexPath = findCommandPath("codex");
+      if (!codexPath) {
+        throw new Error("Codex CLI is not installed.");
+      }
+
       const codexHome = await ensureCodexHome(rootDir);
       const lastMessageFile = path.join(job.projectDir, ".codex-last-message.txt");
 
-      result = await runProcess("codex", [
+      result = await runProcess(codexPath, [
         "exec",
         "--skip-git-repo-check",
         "--output-last-message",
@@ -234,6 +252,7 @@ async function runBuildJob({ rootDir, job, idea }) {
         cwd: job.projectDir,
         env: {
           ...process.env,
+          PATH: getAugmentedPath(),
           HOME: codexHome,
         },
         onStdout: (line) => appendCodexLog(job, line),
@@ -261,6 +280,51 @@ async function runBuildJob({ rootDir, job, idea }) {
   } finally {
     job.updatedAt = new Date().toISOString();
   }
+}
+
+function openBuildLogTerminal(projectDir, logPath, providerLabel) {
+  const tailCommand = [
+    `cd ${shellQuote(projectDir)}`,
+    `printf '%s\\n\\n' "Goalie: ${providerLabel} is building this project. Live logs below."`,
+    `tail -n 50 -f ${shellQuote(logPath)}`,
+  ].join(" && ");
+
+  const script = [
+    'tell application "Terminal"',
+    "  activate",
+    `  do script ${JSON.stringify(tailCommand)}`,
+    "end tell",
+  ].join("\n");
+
+  const child = spawn("osascript", ["-e", script], {
+    stdio: "ignore",
+    detached: true,
+  });
+  child.unref();
+}
+
+function getAugmentedPath() {
+  const parts = (process.env.PATH || "").split(path.delimiter).filter(Boolean);
+  const extras = [
+    path.join(os.homedir(), ".local", "bin"),
+    path.join(os.homedir(), ".npm-global", "bin"),
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+  ];
+
+  for (const entry of extras) {
+    if (!parts.includes(entry)) {
+      parts.push(entry);
+    }
+  }
+
+  return parts.join(path.delimiter);
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 async function getClaudeStatus() {
@@ -510,6 +574,10 @@ function appendJobLog(job, message) {
 
   job.logs = job.logs.slice(-140);
   job.updatedAt = new Date().toISOString();
+
+  if (job.logPath) {
+    void fs.appendFile(job.logPath, `${lines.join("\n")}\n`, "utf8").catch(() => {});
+  }
 }
 
 function appendCodexLog(job, chunk) {

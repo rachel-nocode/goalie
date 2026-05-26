@@ -4,6 +4,7 @@ const state = {
   provider: "claude",
   providers: {},
   currentRequest: null,
+  ideaRevealTimer: null,
   feedbackTimeout: null,
   defaultFeedback: "Pulling trend signals…",
   activeBuildId: "",
@@ -242,35 +243,41 @@ function applyHealthPayload(payload) {
 async function fetchIdeas({ refresh = false } = {}) {
   const requestId = Symbol("ideas");
   state.currentRequest = requestId;
+  clearIdeaLoadingTimers();
 
   setFeedback(refresh ? "Refreshing today’s goals…" : "Pulling trend signals…", { persist: true });
+  renderLoadingState(2);
 
   try {
-    const url = new URL("/api/ideas", window.location.origin);
-    url.searchParams.set("category", state.category);
-    url.searchParams.set("intensity", String(state.intensity));
-    url.searchParams.set("provider", state.provider);
-    if (refresh) {
-      url.searchParams.set("refresh", "1");
-    }
-
-    const response = await fetch(url);
-
-    if (!response.ok) {
-      throw new Error("The idea feed could not load.");
-    }
-
-    const payload = await response.json();
+    const previewPayload = await requestIdeas({ refresh, limit: 2 });
     if (state.currentRequest !== requestId) {
       return;
     }
 
-    if (payload.providers) {
-      state.providers = payload.providers;
+    applyPayloadMeta(previewPayload);
+
+    if (previewPayload.providers) {
+      state.providers = previewPayload.providers;
       syncProviderButtons();
     }
 
-    renderPayload(payload);
+    const previewCount = previewPayload.ideas?.length || 0;
+    renderIdeas(previewPayload.ideas || [], previewPayload);
+
+    if (previewPayload.partial && previewCount < (previewPayload.totalIdeas || 12)) {
+      appendLoadingPlaceholders(2);
+      setFeedback("First goals ready. Loading more…", { persist: true });
+      void loadRemainingIdeas(requestId, { refresh, startIndex: previewCount });
+      return;
+    }
+
+    if (previewCount < (previewPayload.totalIdeas || previewPayload.ideas?.length || previewCount)) {
+      appendLoadingPlaceholders(2);
+      revealRemainingIdeas(previewPayload, previewCount);
+      return;
+    }
+
+    setFeedback("Fresh goals loaded.", { persist: true });
   } catch (error) {
     if (state.currentRequest !== requestId) {
       return;
@@ -280,7 +287,78 @@ async function fetchIdeas({ refresh = false } = {}) {
   }
 }
 
-function renderPayload(payload) {
+function buildIdeasUrl({ refresh = false, limit = 12 } = {}) {
+  const url = new URL("/api/ideas", window.location.origin);
+  url.searchParams.set("category", state.category);
+  url.searchParams.set("intensity", String(state.intensity));
+  url.searchParams.set("provider", state.provider);
+  url.searchParams.set("limit", String(limit));
+  if (refresh) {
+    url.searchParams.set("refresh", "1");
+  }
+  return url;
+}
+
+async function requestIdeas({ refresh = false, limit = 12 } = {}) {
+  const response = await fetch(buildIdeasUrl({ refresh, limit }));
+
+  if (!response.ok) {
+    throw new Error("The idea feed could not load.");
+  }
+
+  return await response.json();
+}
+
+async function loadRemainingIdeas(requestId, { refresh = false, startIndex = 2 } = {}) {
+  const maxAttempts = 90;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    if (state.currentRequest !== requestId) {
+      return;
+    }
+
+    await sleep(attempt === 0 ? 1200 : 2000);
+
+    try {
+      const payload = await requestIdeas({ refresh: attempt === 0 ? refresh : false, limit: 12 });
+      if (state.currentRequest !== requestId) {
+        return;
+      }
+
+      applyPayloadMeta(payload);
+
+      if (payload.providers) {
+        state.providers = payload.providers;
+        syncProviderButtons();
+      }
+
+      const totalIdeas = payload.totalIdeas || payload.ideas?.length || 0;
+      const isComplete = !payload.partial && totalIdeas > startIndex;
+
+      if (!isComplete) {
+        if (payload.ideas?.length > startIndex) {
+          replaceVisibleIdeas(payload.ideas.slice(0, payload.ideas.length), payload);
+          startIndex = payload.ideas.length;
+          setFeedback(`Loaded ${startIndex} of ${totalIdeas || 12} goals…`, { persist: true });
+        }
+        continue;
+      }
+
+      removeLoadingPlaceholders();
+      revealRemainingIdeas(payload, startIndex);
+      return;
+    } catch {
+      continue;
+    }
+  }
+
+  if (state.currentRequest === requestId) {
+    removeLoadingPlaceholders();
+    setFeedback("Some goals are still loading. Try refresh.", { persist: true });
+  }
+}
+
+function applyPayloadMeta(payload) {
   state.lastPayload = payload;
   elements.generatedDate.textContent = payload.generatedDateLabel || "Today";
 
@@ -295,8 +373,99 @@ function renderPayload(payload) {
   if (payload.projectRoot) {
     elements.projectRootChip.textContent = `Builds in ${shortenPath(payload.projectRoot)}`;
   }
-  setFeedback("Fresh goals loaded.", { persist: true });
+}
 
+function revealRemainingIdeas(payload, startIndex = 2) {
+  clearIdeaLoadingTimers();
+  state.lastPayload = payload;
+  applyPayloadMeta(payload);
+
+  const ideas = payload.ideas || [];
+  const initial = ideas.slice(0, startIndex);
+  const remaining = ideas.slice(startIndex);
+
+  renderIdeas(initial, payload);
+
+  if (!remaining.length) {
+    setFeedback("Fresh goals loaded.", { persist: true });
+    return;
+  }
+
+  setFeedback(`Showing ${startIndex} of ${ideas.length} goals…`, { persist: true });
+  appendLoadingPlaceholders(Math.min(2, remaining.length));
+
+  let index = 0;
+  const batchSize = 2;
+
+  state.ideaRevealTimer = window.setInterval(() => {
+    removeLoadingPlaceholders();
+
+    const batch = remaining.slice(index, index + batchSize);
+    if (!batch.length) {
+      clearIdeaLoadingTimers();
+      setFeedback("Fresh goals loaded.", { persist: true });
+      return;
+    }
+
+    batch.forEach((idea, batchIndex) => {
+      elements.ideasGrid.append(buildIdeaCard(idea, payload, startIndex + index + batchIndex));
+    });
+
+    index += batchSize;
+
+    if (index < remaining.length) {
+      appendLoadingPlaceholders(Math.min(2, remaining.length - index));
+      setFeedback(`Showing ${startIndex + index} of ${ideas.length} goals…`, { persist: true });
+    } else {
+      clearIdeaLoadingTimers();
+      setFeedback("Fresh goals loaded.", { persist: true });
+    }
+  }, 400);
+}
+
+function replaceVisibleIdeas(ideas, payload) {
+  removeLoadingPlaceholders();
+  renderIdeas(ideas, payload);
+  appendLoadingPlaceholders(2);
+}
+
+function appendLoadingPlaceholders(count = 2) {
+  removeLoadingPlaceholders();
+
+  for (let index = 0; index < count; index += 1) {
+    const card = document.createElement("article");
+    card.className = "idea-card skeleton-card is-loading-more";
+    card.innerHTML = `
+      <div class="skeleton-line short"></div>
+      <div class="skeleton-line tall"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line"></div>
+      <div class="skeleton-line medium"></div>
+    `;
+    elements.ideasGrid.append(card);
+  }
+}
+
+function removeLoadingPlaceholders() {
+  elements.ideasGrid.querySelectorAll(".is-loading-more").forEach((node) => node.remove());
+}
+
+function clearIdeaLoadingTimers() {
+  if (state.ideaRevealTimer) {
+    window.clearInterval(state.ideaRevealTimer);
+    state.ideaRevealTimer = null;
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function renderPayload(payload) {
+  applyPayloadMeta(payload);
+  setFeedback("Fresh goals loaded.", { persist: true });
   renderIdeas(payload.ideas || [], payload);
 }
 
@@ -643,20 +812,21 @@ function createGoalActions(idea, payload, { fromSaved = false } = {}) {
         }),
       });
 
+      const jobPayload = await response.json().catch(() => ({}));
+
       if (!response.ok) {
-        throw new Error("The build could not be started.");
+        throw new Error(jobPayload.error || "The build could not be started.");
       }
 
-      const job = await response.json();
+      const job = jobPayload;
       state.activeBuildId = job.id;
       state.activeBuildJob = job;
       startButton.textContent = "Building…";
       setBuildModalVisible(true);
       renderBuildJob(job);
       startBuildPolling(job.id, idea, payload, startButton, markDoneButton, saveButton, { fromSaved });
-      flashFeedback("Goal started.");
-    } catch {
-      flashFeedback("The goal could not be started.");
+    } catch (error) {
+      flashFeedback(error instanceof Error ? error.message : "The goal could not be started.");
       startButton.disabled = false;
       markDoneButton.disabled = false;
       saveButton.disabled = false;
@@ -749,10 +919,11 @@ async function setGoalCompletion(ideaId, completed, { source = "manual", project
   }
 }
 
-function renderLoadingState() {
+function renderLoadingState(count = 2) {
+  clearIdeaLoadingTimers();
   elements.ideasGrid.innerHTML = "";
 
-  for (let index = 0; index < 12; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const card = document.createElement("article");
     card.className = "idea-card skeleton-card";
     card.innerHTML = `
@@ -955,7 +1126,7 @@ function describeBuildJob(job) {
   return {
     pill: "Building…",
     title: `Building ${job.ideaTitle}`,
-    copy: `${job.providerLabel} is working on this goal now. Keep Goalie open while the build finishes.`,
+    copy: `${job.providerLabel} is working on this goal now. Watch live output in the Terminal window Goalie opened.`,
     markState: "running",
     markGlyph: "",
     steps: buildStepsForStatus(job),

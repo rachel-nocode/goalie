@@ -18,6 +18,10 @@ let isQuitting = false;
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
+if (process.platform === "darwin") {
+  app.disableHardwareAcceleration();
+}
+
 if (!gotSingleInstanceLock) {
   app.quit();
 } else {
@@ -93,13 +97,23 @@ function createWindowShell() {
     titleBarStyle: "hiddenInset",
     trafficLightPosition: { x: 18, y: 18 },
     autoHideMenuBar: true,
-    show: true,
+    show: false,
     icon: appIconPath,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+    }
+  });
+
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    console.error(`[goalie-window] Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
   });
 
   void mainWindow.loadFile(loadingPage);
@@ -132,6 +146,8 @@ async function loadAppUrl(port) {
     await mainWindow.loadURL(appUrl, {
       extraHeaders: "Cache-Control: no-cache\r\nPragma: no-cache\r\n",
     });
+    mainWindow.show();
+    mainWindow.focus();
   } catch (error) {
     dialog.showErrorBox(
       "Goalie could not load",
